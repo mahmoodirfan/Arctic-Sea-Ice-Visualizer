@@ -1,0 +1,106 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import requests
+import seaborn as sns
+from io import StringIO
+from pathlib import Path
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib import gridspec, path as mpath, patches as mpatches
+
+# ── Global style ───────────────────────────────────────────────────────
+plt.rcParams.update({
+    "font.family": "Arial",
+    "text.color":  "black",
+    "axes.labelcolor": "black",
+    "xtick.color": "black",
+    "ytick.color": "black",
+    "axes.edgecolor": "black",
+    "figure.facecolor": "#f0f0f5"
+})
+sns.set_palette("husl")
+
+# ── Download sea-ice time series ───────────────────────────────────────
+def get_sea_ice():
+    url = ("https://noaadata.apps.nsidc.org/NOAA/G02135/"
+           "north/daily/data/N_seaice_extent_daily_v3.0.csv")
+    r = requests.get(url, timeout=60); r.raise_for_status()
+    df = pd.read_csv(StringIO(r.text), skiprows=[1]).rename(columns=str.strip)
+    for c in ["Year","Month","Day","Extent"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df.dropna(subset=["Year","Month","Day","Extent"], inplace=True)
+    df["Date"] = pd.to_datetime(df[["Year","Month","Day"]])
+    df["DayOfYear"] = df.Date.dt.dayofyear
+    return df
+
+# ── Build combined figure ─────────────────────────────────────────────
+def build_figure(df):
+    fig = plt.figure(figsize=(15,18), facecolor="#f0f0f5")
+    gs  = gridspec.GridSpec(3,1, height_ratios=[1.2,1,1], hspace=.35)
+
+    # 1️⃣  TRUE CIRCULAR POLAR MAP (title adjusted)
+    ax1 = plt.subplot(gs[0], projection=ccrs.NorthPolarStereo())
+    ax1.set_extent([-180,180,50,90], ccrs.PlateCarree())
+    ax1.patch.set_visible(False)
+
+    # Draw circle background
+    circ = mpatches.Circle((0.5,0.5), 0.5,
+                           transform=ax1.transAxes,
+                           facecolor="#d6ecf3", edgecolor="none", zorder=0)
+    ax1.add_patch(circ)
+
+    ax1.add_feature(cfeature.OCEAN, facecolor="white", zorder=1)
+    ax1.add_feature(cfeature.LAND , facecolor="#228B22", zorder=2)
+    ax1.coastlines('110m', color="black", lw=1, zorder=3)
+    ax1.gridlines(draw_labels=False, linestyle='--', alpha=.3, zorder=4)
+
+    ax1.set_title("Arctic Region - Polar View", fontsize=18,
+                  fontweight="bold", pad=20)
+
+    # 2️⃣  Time‐series panel
+    ax2 = plt.subplot(gs[1]); ax2.set_facecolor("#f2f2f2")
+    ax2.plot(df.Date, df.Extent, color="darkred", alpha=0.25, label="Daily")
+    ann = df.groupby("Year").Extent.mean()
+    ax2.plot(pd.to_datetime(ann.index.astype(str)+"-07-01"),
+             ann.values, color="black", lw=2.5, label="Annual Avg")
+    x = (df.Date - df.Date.min()).dt.days.values
+    z = np.polyfit(x, df.Extent.values, 1)
+    ax2.plot(df.Date, np.poly1d(z)(x), "r--", lw=2,
+             label=f"Trend: {z[0]*365.25:.4f} M km²/yr")
+    ax2.set_title("Arctic Sea-Ice Extent 1978 - Present", fontsize=18,
+                  fontweight="bold")
+    ax2.set_ylabel("Extent (million km²)", fontsize=13)
+    ax2.grid(alpha=.2); ax2.legend(loc="upper right", fontsize=11)
+
+    # 3️⃣  September‐minimum panel
+    ax3 = plt.subplot(gs[2]); ax3.set_facecolor("#f2f2f2")
+    sept = df[df.Month==9].groupby("Year").Extent.min().reset_index()
+    ax3.bar(sept.Year, sept.Extent, color="#4682B4", edgecolor="black", width=0.9)
+    zs = np.polyfit(sept.Year, sept.Extent, 1)
+    ax3.plot(sept.Year, np.poly1d(zs)(sept.Year), "r--", lw=2.5, label="Trend")
+    ax3.set_title("September Minimum Sea - Ice Extent", fontsize=18,
+                  fontweight="bold")
+    ax3.set_xlabel("Year", fontsize=13)
+    ax3.set_ylabel("Minimum Extent (million km²)", fontsize=13)
+    ax3.grid(alpha=.2); ax3.legend(loc="upper right", fontsize=11)
+
+    return fig
+
+# ── Save to Desktop ────────────────────────────────────────────────────
+def save_figure(fig):
+    out = Path.home()/"Desktop"/"Arctic_Sea_Ice_Plots"
+    out.mkdir(exist_ok=True)
+    fp = out/"arctic_combined_summary.png"
+    fig.savefig(fp, dpi=300, bbox_inches="tight", facecolor="#f0f0f5")
+    plt.close(fig)
+    print("✅ Saved to:", fp)
+
+# ── Main ────────────────────────────────────────────────────────────────
+def main():
+    df  = get_sea_ice()
+    fig = build_figure(df)
+    save_figure(fig)
+
+if __name__=="__main__":
+    main()
